@@ -6,16 +6,21 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-const serviceAccount = require("./firebase-config.json");
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+// Inicializar Firebase con variables de entorno
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    }),
+  });
+}
 
 const db = admin.firestore();
 const games = db.collection("games");
 
-app.use(cors()); // permite peticiones desde frontend
+app.use(cors());
 app.use(express.json());
 
 // GET all games
@@ -29,16 +34,16 @@ app.get("/games", async (req, res) => {
   }
 });
 
-// GET one game
+// POST array de juegos de prueba (ejemplo)
 app.post("/games/data", (req, res) => {
-  // Espera un array de juegos en el body
   const gamesData = req.body;
-  // Puedes agregar validaciones aquí si lo deseas
   res.json({
     message: "Datos de juegos recibidos correctamente",
     games: gamesData,
   });
 });
+
+// GET one game
 app.get("/games/:id", async (req, res) => {
   try {
     const doc = await games.doc(req.params.id).get();
@@ -52,7 +57,6 @@ app.get("/games/:id", async (req, res) => {
 // POST new game
 app.post("/games", async (req, res) => {
   try {
-    // Recibe todos los parámetros del body según gamesData
     const {
       title,
       price,
@@ -70,7 +74,6 @@ app.post("/games", async (req, res) => {
       featured,
     } = req.body;
 
-    // Todos los campos son obligatorios
     if (
       !title ||
       price === undefined ||
@@ -81,12 +84,11 @@ app.post("/games", async (req, res) => {
       !platform ||
       rating === undefined ||
       !description ||
-      !requirements ||
-      !requirements.os ||
-      !requirements.processor ||
-      !requirements.memory ||
-      !requirements.graphics ||
-      !requirements.storage ||
+      !requirements?.os ||
+      !requirements?.processor ||
+      !requirements?.memory ||
+      !requirements?.graphics ||
+      !requirements?.storage ||
       !features ||
       !releaseDate ||
       !publisher ||
