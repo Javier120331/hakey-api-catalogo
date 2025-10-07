@@ -60,6 +60,7 @@ function validateGamePayload(body, requireAll = true) {
   } = body || {};
 
   if (requireAll) {
+    // Validación completa para PUT/POST
     if (!title || typeof title !== "string") errors.push("title (string)");
     if (price === undefined || typeof price !== "number" || price < 0)
       errors.push("price (number >= 0)");
@@ -127,46 +128,105 @@ function validateGamePayload(body, requireAll = true) {
     if (featured === undefined || typeof featured !== "boolean")
       errors.push("featured (boolean)");
   } else {
-    // Partial update: if provided, validate shapes minimally
-    if (requirements && typeof requirements !== "object")
-      errors.push("requirements (invalid)");
+    // Validación parcial para PATCH - solo validar campos presentes
     if (
-      platform &&
-      (!Array.isArray(platform) ||
-        !platform.every((p) => typeof p === "string"))
+      title !== undefined &&
+      (typeof title !== "string" || title.trim() === "")
     )
-      errors.push("platform (array of strings)");
-    if (
-      features &&
-      (!Array.isArray(features) ||
-        !features.every((f) => typeof f === "string"))
-    )
-      errors.push("features (array of strings)");
-    if (
-      rating !== undefined &&
-      (typeof rating !== "number" || rating < 0 || rating > 5)
-    )
-      errors.push("rating (number 0-5)");
+      errors.push("title debe ser un string no vacío");
+
     if (price !== undefined && (typeof price !== "number" || price < 0))
-      errors.push("price (number >= 0)");
+      errors.push("price debe ser un número >= 0");
+
     if (
       originalPrice !== undefined &&
       (typeof originalPrice !== "number" || originalPrice < 0)
     )
-      errors.push("originalPrice (number >= 0)");
+      errors.push("originalPrice debe ser un número >= 0");
+
     if (
       discount !== undefined &&
       (typeof discount !== "number" || discount < 0 || discount > 100)
     )
-      errors.push("discount (number 0-100)");
+      errors.push("discount debe ser un número entre 0-100");
+
     if (
-      releaseDate &&
+      image !== undefined &&
+      (typeof image !== "string" || image.trim() === "")
+    )
+      errors.push("image debe ser un string no vacío");
+
+    if (
+      category !== undefined &&
+      (typeof category !== "string" || category.trim() === "")
+    )
+      errors.push("category debe ser un string no vacío");
+
+    if (platform !== undefined) {
+      if (
+        !Array.isArray(platform) ||
+        !platform.every((p) => typeof p === "string")
+      )
+        errors.push("platform debe ser un array de strings");
+    }
+
+    if (
+      rating !== undefined &&
+      (typeof rating !== "number" || rating < 0 || rating > 5)
+    )
+      errors.push("rating debe ser un número entre 0-5");
+
+    if (
+      description !== undefined &&
+      (typeof description !== "string" || description.trim() === "")
+    )
+      errors.push("description debe ser un string no vacío");
+
+    if (requirements !== undefined) {
+      if (typeof requirements !== "object" || Array.isArray(requirements))
+        errors.push("requirements debe ser un objeto");
+      else {
+        // Validar estructura solo si se proporciona requirements
+        const requiredProps = [
+          "os",
+          "processor",
+          "memory",
+          "graphics",
+          "storage",
+        ];
+        for (const prop of requiredProps) {
+          if (
+            requirements[prop] !== undefined &&
+            typeof requirements[prop] !== "string"
+          )
+            errors.push(`requirements.${prop} debe ser un string`);
+        }
+      }
+    }
+
+    if (features !== undefined) {
+      if (
+        !Array.isArray(features) ||
+        !features.every((f) => typeof f === "string")
+      )
+        errors.push("features debe ser un array de strings");
+    }
+
+    if (
+      releaseDate !== undefined &&
       (typeof releaseDate !== "string" ||
         !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate))
     )
-      errors.push("releaseDate (YYYY-MM-DD)");
+      errors.push("releaseDate debe tener formato YYYY-MM-DD");
+
+    if (
+      publisher !== undefined &&
+      (typeof publisher !== "string" || publisher.trim() === "")
+    )
+      errors.push("publisher debe ser un string no vacío");
+
     if (featured !== undefined && typeof featured !== "boolean")
-      errors.push("featured (boolean)");
+      errors.push("featured debe ser un boolean");
   }
 
   return errors;
@@ -252,11 +312,21 @@ app.get("/api/games/:id", async (req, res) => {
 // Update replace (PUT /games/:id)
 app.put("/api/games/:id", async (req, res) => {
   try {
+    console.log(
+      `[PUT /api/games/${req.params.id}] Request body:`,
+      JSON.stringify(req.body, null, 2)
+    );
+
     const errs = validateGamePayload(req.body, true);
-    if (errs.length > 0)
+    if (errs.length > 0) {
+      console.log(`[PUT /api/games/${req.params.id}] Validation errors:`, errs);
       return res
         .status(400)
-        .json({ error: "Faltan campos obligatorios", missing: errs });
+        .json({
+          error: "Faltan campos obligatorios o tienen formato inválido",
+          missing: errs,
+        });
+    }
 
     const {
       title,
@@ -294,25 +364,57 @@ app.put("/api/games/:id", async (req, res) => {
       req.params.id,
     ];
 
+    console.log(
+      `[PUT /api/games/${req.params.id}] Executing SQL with values:`,
+      vals
+    );
     const [result] = await pool.execute(updateSQL, vals);
-    if (result.affectedRows === 0)
-      return res.status(404).json({ error: "Not found" });
+
+    if (result.affectedRows === 0) {
+      console.log(`[PUT /api/games/${req.params.id}] Game not found`);
+      return res.status(404).json({ error: "Juego no encontrado" });
+    }
 
     const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
       req.params.id,
     ]);
+    console.log(`[PUT /api/games/${req.params.id}] Update successful`);
     return res.json(rows[0]);
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    console.error(`[PUT /api/games/${req.params.id}] Error:`, e);
+    return res
+      .status(500)
+      .json({
+        error: e.message,
+        stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
+      });
   }
 });
 
 // Update partial (PATCH /games/:id)
 app.patch("/api/games/:id", async (req, res) => {
   try {
+    console.log(
+      `[PATCH /api/games/${req.params.id}] Request body:`,
+      JSON.stringify(req.body, null, 2)
+    );
+
+    // Validar que el body no esté vacío
+    if (!req.body || Object.keys(req.body).length === 0) {
+      console.log(`[PATCH /api/games/${req.params.id}] Empty request body`);
+      return res
+        .status(400)
+        .json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
     const errs = validateGamePayload(req.body, false);
-    if (errs.length > 0)
+    if (errs.length > 0) {
+      console.log(
+        `[PATCH /api/games/${req.params.id}] Validation errors:`,
+        errs
+      );
       return res.status(400).json({ error: "Payload inválido", details: errs });
+    }
 
     // Build dynamic SET clause safely
     const allowed = [
@@ -333,35 +435,68 @@ app.patch("/api/games/:id", async (req, res) => {
     ];
     const set = [];
     const values = [];
+
     for (const key of allowed) {
       if (req.body[key] !== undefined) {
         let column = key;
         let val = req.body[key];
-        // map JS names to DB columns
+
+        // Mapear nombres de JS a columnas de DB
         if (key === "originalPrice") column = "original_price";
         if (key === "releaseDate") column = "release_date";
-        if (key === "platform" || key === "requirements" || key === "features")
+
+        // Serializar JSON para campos complejos
+        if (
+          key === "platform" ||
+          key === "requirements" ||
+          key === "features"
+        ) {
           val = JSON.stringify(val);
+        }
+
         set.push(`${column}=?`);
         values.push(val);
       }
     }
-    if (values.length === 0)
-      return res.status(400).json({ error: "No hay campos para actualizar" });
-    // updated_at
+
+    if (values.length === 0) {
+      console.log(
+        `[PATCH /api/games/${req.params.id}] No valid fields to update`
+      );
+      return res
+        .status(400)
+        .json({ error: "No hay campos válidos para actualizar" });
+    }
+
+    // Agregar updated_at
     set.push(`updated_at=CURRENT_TIMESTAMP`);
+
     const sql = `UPDATE games SET ${set.join(", ")} WHERE id=?`;
     values.push(req.params.id);
+
+    console.log(`[PATCH /api/games/${req.params.id}] Executing SQL:`, sql);
+    console.log(`[PATCH /api/games/${req.params.id}] With values:`, values);
+
     const [result] = await pool.execute(sql, values);
-    if (result.affectedRows === 0)
-      return res.status(404).json({ error: "Not found" });
+
+    if (result.affectedRows === 0) {
+      console.log(`[PATCH /api/games/${req.params.id}] Game not found`);
+      return res.status(404).json({ error: "Juego no encontrado" });
+    }
 
     const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
       req.params.id,
     ]);
+    console.log(`[PATCH /api/games/${req.params.id}] Update successful`);
     return res.json(rows[0]);
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    console.error(`[PATCH /api/games/${req.params.id}] Error:`, e);
+    return res
+      .status(500)
+      .json({
+        error: e.message,
+        stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
+      });
   }
 });
 
