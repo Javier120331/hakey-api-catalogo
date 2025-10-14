@@ -320,12 +320,10 @@ app.put("/api/games/:id", async (req, res) => {
     const errs = validateGamePayload(req.body, true);
     if (errs.length > 0) {
       console.log(`[PUT /api/games/${req.params.id}] Validation errors:`, errs);
-      return res
-        .status(400)
-        .json({
-          error: "Faltan campos obligatorios o tienen formato inválido",
-          missing: errs,
-        });
+      return res.status(400).json({
+        error: "Faltan campos obligatorios o tienen formato inválido",
+        missing: errs,
+      });
     }
 
     const {
@@ -382,12 +380,10 @@ app.put("/api/games/:id", async (req, res) => {
     return res.json(rows[0]);
   } catch (e) {
     console.error(`[PUT /api/games/${req.params.id}] Error:`, e);
-    return res
-      .status(500)
-      .json({
-        error: e.message,
-        stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
-      });
+    return res.status(500).json({
+      error: e.message,
+      stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
+    });
   }
 });
 
@@ -491,12 +487,10 @@ app.patch("/api/games/:id", async (req, res) => {
     return res.json(rows[0]);
   } catch (e) {
     console.error(`[PATCH /api/games/${req.params.id}] Error:`, e);
-    return res
-      .status(500)
-      .json({
-        error: e.message,
-        stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
-      });
+    return res.status(500).json({
+      error: e.message,
+      stack: process.env.NODE_ENV === "development" ? e.stack : undefined,
+    });
   }
 });
 
@@ -524,3 +518,157 @@ if (require.main === module) {
 } else {
   module.exports = app;
 }
+
+// api para usuarios de hakey
+
+app.get("/api/usuarios", async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      "SELECT * FROM usuarios ORDER BY id DESC"
+    );
+    return res.json(rows);
+  } catch (e) {
+    console.error(`[GET /api/usuarios/] Error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/usuarios/:id", async (req, res) => {
+  try {
+    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+      req.params.id,
+    ]);
+    if (rows.length === 0)
+      return res.status(404).json({
+        error: "No se encontro el usuario, fue borrado o nunca existio",
+      });
+    console.log(`[GET /api/usuarios/${req.params.id}] User found:`, rows[0]);
+    return res.json(rows[0]);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/usuarios", async (req, res) => {
+  try {
+    const { nombre, email, password } = req.body;
+    const insertSQL = `INSERT INTO usuarios (nombre, email, password) VALUES (?,?,?)`;
+    const vals = [nombre, email, password];
+    const [result] = await pool.execute(insertSQL, vals);
+    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+      result.insertId,
+    ]);
+    return res.status(201).json(rows[0]);
+  } catch (e) {
+    console.error(`[POST /api/usuarios] Error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ejemplo de json para crear un usuario
+/*{
+    "nombre" : "Javier",
+    "email":"jr.tecnon",
+    "password":"1203317380Jj"
+}*/
+
+app.delete("/api/usuarios/:id", async (req, res) => {
+  try {
+    const [result] = await pool.execute("DELETE FROM usuarios WHERE id=?", [
+      req.params.id,
+    ]);
+    if (result.affectedRows === 0)
+      return res.status(404).json({ error: "Not found" });
+    return res.status(204).send();
+  } catch (e) {
+    console.error(`[DELETE /api/usuarios/${req.params.id}] Error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/usuarios/:id", async (req, res) => {
+  try {
+    console.log(
+      `[PUT /api/usuarios/${req.params.id}] Request body:`,
+      JSON.stringify(req.body, null, 2)
+    );
+
+    const { nombre, email, password } = req.body;
+
+    if (!nombre || !email || !password) {
+      console.log(
+        `[PUT /api/usuarios/${req.params.id}] Validation errors: Missing fields`
+      );
+      return res.status(400).json({
+        error: "Faltan campos requeridos",
+      });
+    }
+
+    const [result] = await pool.execute(
+      "UPDATE usuarios SET nombre = ?, email = ?, password = ? WHERE id = ?",
+      [nombre, email, password, req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: "No se encontro el usuario, fue borrado o nunca existio",
+      });
+    }
+
+    return res.json({ id: req.params.id, nombre, email });
+  } catch (e) {
+    console.error(`[PUT /api/usuarios/${req.params.id}] Error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch("/api/usuarios/:id", async (req, res) => {
+  try {
+    console.log(
+      `[PATCH /api/usuarios/${req.params.id}] Request body:`,
+      JSON.stringify(req.body, null, 2)
+    );
+    if (!req.body || Object.keys(req.body).length === 0) {
+      console.log(`[PATCH /api/usuarios/${req.params.id}] Empty request body`);
+      return res
+        .status(400)
+        .json({ error: "No se proporcionaron campos para actualizar" });
+    }
+    const allowed = ["nombre", "email", "password"];
+    const set = [];
+    const values = [];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        let column = key;
+        let val = req.body[key];
+        set.push(`${column}=?`);
+        values.push(val);
+      }
+    }
+    if (values.length === 0) {
+      console.log(
+        `[PATCH /api/usuarios/${req.params.id}] No valid fields to update`
+      );
+      return res
+        .status(400)
+        .json({ error: "No hay campos válidos para actualizar" });
+    }
+    const sql = `UPDATE usuarios SET ${set.join(", ")} WHERE id=?`;
+    values.push(req.params.id);
+    console.log(`[PATCH /api/usuarios/${req.params.id}] Executing SQL:`, sql);
+    console.log(`[PATCH /api/usuarios/${req.params.id}] With values:`, values);
+    const [result] = await pool.execute(sql, values);
+    if (result.affectedRows === 0) {
+      console.log(`[PATCH /api/usuarios/${req.params.id}] User not found`);
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+      req.params.id,
+    ]);
+    console.log(`[PATCH /api/usuarios/${req.params.id}] Update successful`);
+    return res.json(rows[0]);
+  } catch (e) {
+    console.error(`[PATCH /api/usuarios/${req.params.id}] Error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
