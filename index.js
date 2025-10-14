@@ -673,13 +673,13 @@ app.patch("/api/usuarios/:id", async (req, res) => {
   }
 });
 
-app.post("/api/login", async (req, res) => {
+app.post("/api/usuarios/login", async (req, res) => {
   try {
     // 1. Recibe el correo y la contraseña del cuerpo de la petición
-    const { correo, contrasena } = req.body;
+    const { email, password } = req.body;
 
     // Valida que los datos no estén vacíos
-    if (!correo || !contrasena) {
+    if (!email || !password) {
       return res
         .status(400)
         .json({ error: "El correo y la contraseña son obligatorios" });
@@ -688,7 +688,7 @@ app.post("/api/login", async (req, res) => {
     // 2. Busca en la base de datos un usuario con ese correo
     const [rows] = await pool.execute(
       "SELECT * FROM usuarios WHERE email = ?",
-      [correo]
+      [email]
     );
 
     // 3. Si no se encuentra un usuario, devuelve un error 401
@@ -701,13 +701,13 @@ app.post("/api/login", async (req, res) => {
 
     // 4. Compara la contraseña de la petición con la guardada (como texto plano)
     // Si no coinciden, devuelve el mismo error 401
-    if (user.password !== contrasena) {
+    if (user.password !== password) {
       return res.status(401).json({ error: "Credenciales inválidas" });
     }
 
     // 5. Si todo coincide, la validación es exitosa
     // Se crea un objeto de usuario sin la contraseña para devolverlo
-    const { password, ...safeUser } = user;
+    const { password: userPassword, ...safeUser } = user;
 
     return res.status(200).json({
       message: "Login exitoso",
@@ -715,7 +715,13 @@ app.post("/api/login", async (req, res) => {
     });
   } catch (e) {
     // Manejo de errores inesperados del servidor
-    console.error(`[POST /api/auth/login] Error:`, e);
+    console.error(`[POST /api/login] Error:`, e);
     return res.status(500).json({ error: "Error interno del servidor" });
   }
 });
+
+//{
+//"email": "jr.tecnon@gmail.com",
+//"password": "1203317380Jj"
+
+//}
