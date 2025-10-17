@@ -7,6 +7,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Verificar que DATABASE_URL esté configurado
+if (!process.env.DATABASE_URL) {
+  console.error(
+    "❌ ERROR: DATABASE_URL no está configurado en el archivo .env"
+  );
+  console.error("Por favor crea un archivo .env basado en .env.example");
+  process.exit(1);
+}
+
 // Configure MySQL pool for Aiven. Set DATABASE_URL in env.
 // For Aiven, SSL is usually required
 const pool = mysql.createPool({
@@ -15,6 +24,16 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
 });
+
+// Helper to execute queries while converting any undefined bind params to null
+// MySQL driver throws if bind parameters contain `undefined`. Convert them to
+// `null` so that SQL NULL is used instead.
+async function safeExecute(sql, params) {
+  const safeParams = Array.isArray(params)
+    ? params.map((p) => (p === undefined ? null : p))
+    : params;
+  return pool.execute(sql, safeParams);
+}
 
 /*
   Expected MySQL table (run once in your Aiven database):
@@ -276,8 +295,8 @@ app.post("/games", async (req, res) => {
       featured,
     ];
 
-    const [result] = await pool.execute(insertSQL, vals);
-    const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
+    const [result] = await safeExecute(insertSQL, vals);
+    const [rows] = await safeExecute("SELECT * FROM games WHERE id = ?", [
       result.insertId,
     ]);
     return res.status(201).json(rows[0]);
@@ -289,7 +308,7 @@ app.post("/games", async (req, res) => {
 // Read all (GET /games)
 app.get("/api/games", async (req, res) => {
   try {
-    const [rows] = await pool.execute("SELECT * FROM games ORDER BY id DESC");
+    const [rows] = await safeExecute("SELECT * FROM games ORDER BY id DESC");
     return res.json(rows);
   } catch (e) {
     return res.status(500).json({ error: e.message });
@@ -299,7 +318,7 @@ app.get("/api/games", async (req, res) => {
 // Read one (GET /games/:id)
 app.get("/api/games/:id", async (req, res) => {
   try {
-    const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
+    const [rows] = await safeExecute("SELECT * FROM games WHERE id = ?", [
       req.params.id,
     ]);
     if (rows.length === 0) return res.status(404).json({ error: "Not found" });
@@ -366,14 +385,14 @@ app.put("/api/games/:id", async (req, res) => {
       `[PUT /api/games/${req.params.id}] Executing SQL with values:`,
       vals
     );
-    const [result] = await pool.execute(updateSQL, vals);
+    const [result] = await safeExecute(updateSQL, vals);
 
     if (result.affectedRows === 0) {
       console.log(`[PUT /api/games/${req.params.id}] Game not found`);
       return res.status(404).json({ error: "Juego no encontrado" });
     }
 
-    const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
+    const [rows] = await safeExecute("SELECT * FROM games WHERE id = ?", [
       req.params.id,
     ]);
     console.log(`[PUT /api/games/${req.params.id}] Update successful`);
@@ -473,14 +492,14 @@ app.patch("/api/games/:id", async (req, res) => {
     console.log(`[PATCH /api/games/${req.params.id}] Executing SQL:`, sql);
     console.log(`[PATCH /api/games/${req.params.id}] With values:`, values);
 
-    const [result] = await pool.execute(sql, values);
+    const [result] = await safeExecute(sql, values);
 
     if (result.affectedRows === 0) {
       console.log(`[PATCH /api/games/${req.params.id}] Game not found`);
       return res.status(404).json({ error: "Juego no encontrado" });
     }
 
-    const [rows] = await pool.execute("SELECT * FROM games WHERE id = ?", [
+    const [rows] = await safeExecute("SELECT * FROM games WHERE id = ?", [
       req.params.id,
     ]);
     console.log(`[PATCH /api/games/${req.params.id}] Update successful`);
@@ -497,7 +516,7 @@ app.patch("/api/games/:id", async (req, res) => {
 // Delete (DELETE /games/:id)
 app.delete("/api/games/:id", async (req, res) => {
   try {
-    const [result] = await pool.execute("DELETE FROM games WHERE id=?", [
+    const [result] = await safeExecute("DELETE FROM games WHERE id=?", [
       req.params.id,
     ]);
     if (result.affectedRows === 0)
@@ -523,7 +542,7 @@ if (require.main === module) {
 
 app.get("/api/usuarios", async (req, res) => {
   try {
-    const [rows] = await pool.execute(
+    const [rows] = await safeExecute(
       "SELECT * FROM usuarios ORDER BY id DESC"
     );
     return res.json(rows);
@@ -535,7 +554,7 @@ app.get("/api/usuarios", async (req, res) => {
 
 app.get("/api/usuarios/:id", async (req, res) => {
   try {
-    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+    const [rows] = await safeExecute("SELECT * FROM usuarios WHERE id = ?", [
       req.params.id,
     ]);
     if (rows.length === 0)
@@ -551,17 +570,61 @@ app.get("/api/usuarios/:id", async (req, res) => {
 
 app.post("/api/usuarios", async (req, res) => {
   try {
-    const { nombre, email, password } = req.body;
-    const insertSQL = `INSERT INTO usuarios (nombre, email, password) VALUES (?,?,?)`;
-    const vals = [nombre, email, password];
-    const [result] = await pool.execute(insertSQL, vals);
-    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+    // Aceptar tanto el formato antiguo como el nuevo
+    const nombre = req.body.nombre;
+    const email = req.body.email || req.body.correo;
+    const password = req.body.password || req.body.contrasena;
+    const numero = req.body.numero;
+    
+    // Validar campos requeridos
+    if (!nombre || !email || !password) {
+      return res.status(400).json({
+        error: "Todos los campos son obligatorios (nombre, email/correo, password/contrasena)",
+        received: Object.keys(req.body)
+      });
+    }
+
+    // Verificar si la tabla tiene columna 'numero'
+    let insertSQL, vals;
+    
+    if (numero) {
+      // Si se proporciona número, intentar insertarlo también
+      insertSQL = `INSERT INTO usuarios (nombre, email, password, numero) VALUES (?,?,?,?)`;
+      vals = [nombre, email, password, numero];
+    } else {
+      insertSQL = `INSERT INTO usuarios (nombre, email, password) VALUES (?,?,?)`;
+      vals = [nombre, email, password];
+    }
+    
+    const [result] = await safeExecute(insertSQL, vals);
+    const [rows] = await safeExecute("SELECT * FROM usuarios WHERE id = ?", [
       result.insertId,
     ]);
     return res.status(201).json(rows[0]);
   } catch (e) {
     console.error(`[POST /api/usuarios] Error:`, e);
-    return res.status(500).json({ error: e.message });
+    console.error(`[POST /api/usuarios] SQL Error Code:`, e.code);
+    console.error(`[POST /api/usuarios] SQL Message:`, e.sqlMessage);
+    
+    // Mensaje más descriptivo según el tipo de error
+    if (e.code === "ECONNREFUSED") {
+      return res.status(503).json({
+        error: "No se puede conectar a la base de datos. Verifica la configuración de DATABASE_URL.",
+      });
+    }
+    
+    if (e.code === "ER_BAD_FIELD_ERROR") {
+      return res.status(500).json({
+        error: "Error en la estructura de la tabla. La columna esperada no existe.",
+        details: e.sqlMessage
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: e.message,
+      code: e.code,
+      sqlMessage: e.sqlMessage 
+    });
   }
 });
 
@@ -574,7 +637,7 @@ app.post("/api/usuarios", async (req, res) => {
 
 app.delete("/api/usuarios/:id", async (req, res) => {
   try {
-    const [result] = await pool.execute("DELETE FROM usuarios WHERE id=?", [
+    const [result] = await safeExecute("DELETE FROM usuarios WHERE id=?", [
       req.params.id,
     ]);
     if (result.affectedRows === 0)
@@ -604,7 +667,7 @@ app.put("/api/usuarios/:id", async (req, res) => {
       });
     }
 
-    const [result] = await pool.execute(
+    const [result] = await safeExecute(
       "UPDATE usuarios SET nombre = ?, email = ?, password = ? WHERE id = ?",
       [nombre, email, password, req.params.id]
     );
@@ -657,12 +720,12 @@ app.patch("/api/usuarios/:id", async (req, res) => {
     values.push(req.params.id);
     console.log(`[PATCH /api/usuarios/${req.params.id}] Executing SQL:`, sql);
     console.log(`[PATCH /api/usuarios/${req.params.id}] With values:`, values);
-    const [result] = await pool.execute(sql, values);
+    const [result] = await safeExecute(sql, values);
     if (result.affectedRows === 0) {
       console.log(`[PATCH /api/usuarios/${req.params.id}] User not found`);
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
-    const [rows] = await pool.execute("SELECT * FROM usuarios WHERE id = ?", [
+    const [rows] = await safeExecute("SELECT * FROM usuarios WHERE id = ?", [
       req.params.id,
     ]);
     console.log(`[PATCH /api/usuarios/${req.params.id}] Update successful`);
@@ -675,8 +738,9 @@ app.patch("/api/usuarios/:id", async (req, res) => {
 
 app.post("/api/usuarios/login", async (req, res) => {
   try {
-    // 1. Recibe el correo y la contraseña del cuerpo de la petición
-    const { email, password } = req.body;
+    // 1. Recibe el correo y la contraseña del cuerpo de la petición (aceptar ambos formatos)
+    const email = req.body.email || req.body.correo;
+    const password = req.body.password || req.body.contrasena;
 
     // Valida que los datos no estén vacíos
     if (!email || !password) {
@@ -686,7 +750,7 @@ app.post("/api/usuarios/login", async (req, res) => {
     }
 
     // 2. Busca en la base de datos un usuario con ese correo
-    const [rows] = await pool.execute(
+    const [rows] = await safeExecute(
       "SELECT * FROM usuarios WHERE email = ?",
       [email]
     );
